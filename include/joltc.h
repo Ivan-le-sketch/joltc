@@ -1833,6 +1833,8 @@ JPH_CAPI JPH_BodyLockMultiWrite* JPH_BodyLockInterface_LockMultiWrite(const JPH_
 JPH_CAPI void JPH_BodyLockMultiWrite_Destroy(JPH_BodyLockMultiWrite* ioLock);
 JPH_CAPI JPH_Body* JPH_BodyLockMultiWrite_GetBody(JPH_BodyLockMultiWrite* ioLock, uint32_t bodyIndex);
 
+JPH_CAPI JPH_Body* JPH_BodyLockInterface_TryGetBody(const JPH_BodyLockInterface* lockInterface, const JPH_BodyID bodyID);
+
 //--------------------------------------------------------------------------------------------------
 // JPH_MotionProperties
 //--------------------------------------------------------------------------------------------------

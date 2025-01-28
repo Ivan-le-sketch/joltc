@@ -5704,6 +5704,15 @@ JPH_Body* JPH_BodyLockMultiWrite_GetBody(JPH_BodyLockMultiWrite* ioLock, uint32_
 	return reinterpret_cast<JPH_Body*>(joltBody);
 }
 
+JPH_Body* JPH_BodyLockInterface_TryGetBody(const JPH_BodyLockInterface* lockInterface, const JPH_BodyID bodyID)
+{
+	JPH_UNUSED(lockInterface);
+	auto joltBodyLockInterface = AsBodyLockInterface(lockInterface);
+
+	JPH::Body* body = joltBodyLockInterface->TryGetBody(JPH::BodyID(bodyID));
+	return reinterpret_cast<JPH_Body*>(body);
+}
+
 //--------------------------------------------------------------------------------------------------
 // JPH_CollideSettingsBase
 //--------------------------------------------------------------------------------------------------
