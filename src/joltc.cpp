@@ -1004,6 +1004,20 @@ const JPH_BodyLockInterface* JPH_PhysicsSystem_GetBodyLockInterfaceNoLock(const 
 	return reinterpret_cast<const JPH_BodyLockInterface*>(&system->physicsSystem->GetBodyLockInterfaceNoLock());
 }
 
+void JPH_PhysicsSystem_SaveState(JPH_PhysicsSystem* system, JPH_StateRecorder* recorder, JPH_StateRecorderState state, const JPH_StateRecorderFilter* filter)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorder*>(recorder);
+	auto jolt_filter = reinterpret_cast<const JPH::StateRecorderFilter*>(filter);
+	system->physicsSystem->SaveState(*jolt_recorder, static_cast<JPH::EStateRecorderState>(state), jolt_filter);
+}
+
+bool JPH_PhysicsSystem_RestoreState(JPH_PhysicsSystem* system, JPH_StateRecorder* recorder, const JPH_StateRecorderFilter* filter)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorder*>(recorder);
+	auto jolt_filter = reinterpret_cast<const JPH::StateRecorderFilter*>(filter);
+	return system->physicsSystem->RestoreState(*jolt_recorder, jolt_filter);
+}
+
 /* JPH_BroadPhaseLayerFilter */
 static const JPH::BroadPhaseLayerFilter& ToJolt(JPH_BroadPhaseLayerFilter* bpFilter)
 {
@@ -8121,6 +8135,22 @@ uint64_t JPH_CharacterBase_GetGroundUserData(JPH_CharacterBase* character)
 {
 	auto joltCharacter = reinterpret_cast<JPH::CharacterBase*>(character);
 	return joltCharacter->GetGroundUserData();
+}
+
+void JPH_CharacterBase_SaveState(JPH_CharacterBase* character, JPH_StateRecorder* recorder)
+{
+	auto jolt_character = reinterpret_cast<JPH::CharacterBase*>(character);
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorder*>(recorder);
+
+	jolt_character->SaveState(*jolt_recorder);
+}
+
+void JPH_CharacterBase_RestoreState(JPH_CharacterBase* character, JPH_StateRecorder* recorder)
+{
+	auto jolt_character = reinterpret_cast<JPH::CharacterBase*>(character);
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorder*>(recorder);
+
+	jolt_character->RestoreState(*jolt_recorder);
 }
 
 /* CharacterSettings */
