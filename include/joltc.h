@@ -452,6 +452,16 @@ typedef enum JPH_TransmissionMode {
     _JPH_TransmissionMode_Force32 = 0x7FFFFFFF
 } JPH_TransmissionMode;;
 
+typedef enum JPH_StateRecorderState : uint8_t
+{
+	JPH_StateRecorderState_None = 0,
+	JPH_StateRecorderState_Global = 1,
+	JPH_StateRecorderState_Bodies = 2,
+	JPH_StateRecorderState_Contacts = 4,
+	JPH_StateRecorderState_Constraints = 8,
+	JPH_StateRecorderState_All = JPH_StateRecorderState_Global | JPH_StateRecorderState_Bodies | JPH_StateRecorderState_Contacts | JPH_StateRecorderState_Constraints
+} JPH_StateRecorderState;
+
 typedef struct JPH_Vec3 {
 	float x;
 	float y;
@@ -740,6 +750,10 @@ typedef struct JPH_ConeConstraint                   JPH_ConeConstraint;
 typedef struct JPH_SwingTwistConstraint             JPH_SwingTwistConstraint;
 typedef struct JPH_SixDOFConstraint				    JPH_SixDOFConstraint;
 typedef struct JPH_GearConstraint				    JPH_GearConstraint;
+
+/* StateRecorder */
+typedef struct JPH_StateRecorder					JPH_StateRecorder;
+typedef struct JPH_StateRecorderFilter				JPH_StateRecorderFilter;
 
 /* Character, CharacterVirtual */
 typedef struct JPH_CharacterBase					JPH_CharacterBase;
@@ -2734,5 +2748,31 @@ JPH_CAPI void JPH_WheeledVehicleController_SetBrakeInput(JPH_WheeledVehicleContr
 JPH_CAPI float JPH_WheeledVehicleController_GetBrakeInput(const JPH_WheeledVehicleController* vehicle);
 JPH_CAPI void JPH_WheeledVehicleController_SetHandBrakeInput(JPH_WheeledVehicleController* vehicle, float handBrakeInput);
 JPH_CAPI float JPH_WheeledVehicleController_GetHandBrakeInput(const JPH_WheeledVehicleController* vehicle);
+
+
+/* StateRecorder */
+JPH_CAPI JPH_StateRecorder* JPH_StateRecorder_Create();
+JPH_CAPI void JPH_StateRecorder_Destroy(JPH_StateRecorder* recorder);
+JPH_CAPI void JPH_StateRecorder_SetValidating(JPH_StateRecorder* recorder, bool validating);
+JPH_CAPI bool JPH_StateRecorder_IsValidating(JPH_StateRecorder* recorder);
+JPH_CAPI void JPH_StateRecorder_Rewind(JPH_StateRecorder* recorder);
+JPH_CAPI void JPH_StateRecorder_Clear(JPH_StateRecorder* recorder);
+JPH_CAPI bool JPH_StateRecorder_IsEOF(JPH_StateRecorder* recorder);
+JPH_CAPI bool JPH_StateRecorder_IsFailed(JPH_StateRecorder* recorder);
+JPH_CAPI bool JPH_StateRecorder_IsEqual(JPH_StateRecorder* recorder, JPH_StateRecorder* other);
+JPH_CAPI void JPH_StateRecorder_WriteBytes(JPH_StateRecorder* recorder, const void* data, size_t size);
+JPH_CAPI void JPH_StateRecorder_ReadBytes(JPH_StateRecorder* recorder, void* data, size_t size);
+JPH_CAPI size_t JPH_StateRecorder_GetSize(JPH_StateRecorder* recorder);
+
+/* StateRecorderFilter */
+typedef struct JPH_StateRecorderFilter_Procs {
+	bool (JPH_API_CALL* ShouldSaveBody)(void* userData, const JPH_Body* body);
+	bool (JPH_API_CALL* ShouldSaveConstraint)(void* userData, const JPH_Constraint* constraint);
+	bool (JPH_API_CALL* ShouldSaveContact)(void* userData, const JPH_BodyID bodyID1, const JPH_BodyID bodyID2);
+	bool (JPH_API_CALL* ShouldRestoreContact)(void* userData, const JPH_BodyID bodyID1, const JPH_BodyID bodyID2);
+} JPH_StateRecorderFilter_Procs;
+
+JPH_CAPI JPH_StateRecorderFilter* JPH_StateRecorderFilter_Create(JPH_StateRecorderFilter_Procs procs, void* userData);
+JPH_CAPI void JPH_StateRecorderFilter_Destroy(JPH_StateRecorderFilter* filter);
 
 #endif /* JOLT_C_H_ */
