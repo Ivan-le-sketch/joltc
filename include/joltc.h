@@ -2470,6 +2470,15 @@ JPH_CAPI bool JPH_CollisionDispatch_CollideShapeVsShape(
 	const JPH_CollideShapeSettings* collideShapeSettings,
 	JPH_CollideShapeCollectorCallback* callback, void* userData, const JPH_ShapeFilter* shapeFilter);
 
+JPH_CAPI bool JPH_CollisionDispatch_CollideShapeVsShape2(
+	const JPH_Shape* shape1, const JPH_Shape* shape2,
+	const JPH_Vec3* scale1, const JPH_Vec3* scale2,
+	const JPH_Matrix4x4* centerOfMassTransform1, const JPH_Matrix4x4* centerOfMassTransform2,
+	const JPH_CollideShapeSettings* collideShapeSettings,
+	JPH_CollisionCollectorType collectorType,
+	JPH_CollideShapeResultCallback* callback, void* userData,
+	const JPH_ShapeFilter* shapeFilter);
+
 JPH_CAPI bool JPH_CollisionDispatch_CastShapeVsShapeLocalSpace(
 	const JPH_Vec3* direction, const JPH_Shape* shape1, const JPH_Shape* shape2,
 	const JPH_Vec3* scale1InShape2LocalSpace, const JPH_Vec3* scale2,
@@ -2478,12 +2487,30 @@ JPH_CAPI bool JPH_CollisionDispatch_CastShapeVsShapeLocalSpace(
 	JPH_CastShapeCollectorCallback* callback, void* userData,
 	const JPH_ShapeFilter* shapeFilter);
 
+JPH_CAPI bool JPH_CollisionDispatch_CastShapeVsShapeLocalSpace2(
+	const JPH_Vec3* direction, const JPH_Shape* shape1, const JPH_Shape* shape2,
+	const JPH_Vec3* scale1InShape2LocalSpace, const JPH_Vec3* scale2,
+	JPH_Matrix4x4* centerOfMassTransform1InShape2LocalSpace, JPH_Matrix4x4* centerOfMassWorldTransform2,
+	const JPH_ShapeCastSettings* shapeCastSettings,
+	JPH_CollisionCollectorType collectorType,
+	JPH_CastShapeResultCallback* callback, void* userData,
+	const JPH_ShapeFilter* shapeFilter);
+
 JPH_CAPI bool JPH_CollisionDispatch_CastShapeVsShapeWorldSpace(
 	const JPH_Vec3* direction, const JPH_Shape* shape1, const JPH_Shape* shape2,
 	const JPH_Vec3* scale1, const JPH_Vec3* inScale2,
 	const JPH_Matrix4x4* centerOfMassWorldTransform1, const JPH_Matrix4x4* centerOfMassWorldTransform2,
 	const JPH_ShapeCastSettings* shapeCastSettings,
 	JPH_CastShapeCollectorCallback* callback, void* userData,
+	const JPH_ShapeFilter* shapeFilter);
+
+JPH_CAPI bool JPH_CollisionDispatch_CastShapeVsShapeWorldSpace2(
+	const JPH_Vec3* direction, const JPH_Shape* shape1, const JPH_Shape* shape2,
+	const JPH_Vec3* scale1, const JPH_Vec3* inScale2,
+	const JPH_Matrix4x4* centerOfMassWorldTransform1, const JPH_Matrix4x4* centerOfMassWorldTransform2,
+	const JPH_ShapeCastSettings* shapeCastSettings,
+	JPH_CollisionCollectorType collectorType,
+	JPH_CastShapeResultCallback* callback, void* userData,
 	const JPH_ShapeFilter* shapeFilter);
 
 /* DebugRenderer */
