@@ -68,6 +68,7 @@ JPH_SUPPRESS_WARNINGS
 #include "Jolt/Physics/Collision/PhysicsMaterialSimple.h"
 #include "Jolt/Physics/Body/BodyLockMulti.h"
 #include "Jolt/Physics/Ragdoll/Ragdoll.h"
+#include "Jolt/Physics/StateRecorderImpl.h"
 
 #include <iostream>
 #include <cstdarg>
@@ -9554,6 +9555,162 @@ void JPH_EstimateCollisionResponse(const JPH_Body* body1, const JPH_Body* body2,
 			result->impulses[i].frictionImpulse2 = joltResult.mImpulses[i].mFrictionImpulse2;
 		}
 	}
+}
+
+/* StateRecorderFilter */
+class ManagedStateRecorderFilter final : JPH::StateRecorderFilter
+{
+public:
+	bool ShouldSaveBody(const Body& inBody) const override
+	{
+		if (procs.ShouldSaveBody)
+		{
+			return procs.ShouldSaveBody
+			(
+				userData,
+				reinterpret_cast<const JPH_Body*>(&inBody)
+			);
+		}
+
+		return true;
+	}
+
+	bool ShouldSaveConstraint(const Constraint& inConstraint) const override
+	{
+		if (procs.ShouldSaveConstraint)
+		{
+			return procs.ShouldSaveConstraint
+			(
+				userData,
+				reinterpret_cast<const JPH_Constraint*>(&inConstraint)
+			);
+		}
+
+		return true;
+	}
+
+	bool ShouldSaveContact(const BodyID& inBodyID1, const BodyID& inBodyID2) const override
+	{
+		if (procs.ShouldSaveContact)
+		{
+			return procs.ShouldSaveContact
+			(
+				userData,
+				(JPH_BodyID)inBodyID1.GetIndexAndSequenceNumber(),
+				(JPH_BodyID)inBodyID2.GetIndexAndSequenceNumber()
+			);
+		}
+
+		return true;
+	}
+
+	bool ShouldRestoreContact(const BodyID& inBodyID1, const BodyID& inBodyID2) const override
+	{
+		if (procs.ShouldRestoreContact)
+		{
+			return procs.ShouldRestoreContact
+			(
+				userData,
+				(JPH_BodyID)inBodyID1.GetIndexAndSequenceNumber(),
+				(JPH_BodyID)inBodyID2.GetIndexAndSequenceNumber()
+			);
+		}
+
+		return true;
+	}
+
+	JPH_StateRecorderFilter_Procs procs = {};
+	void* userData = nullptr;
+};
+
+JPH_StateRecorderFilter* JPH_StateRecorderFilter_Create(JPH_StateRecorderFilter_Procs procs, void* userData)
+{
+	auto impl = new ManagedStateRecorderFilter();
+	impl->procs = procs;
+	impl->userData = userData;
+	return reinterpret_cast<JPH_StateRecorderFilter*>(impl);
+}
+
+void JPH_StateRecorderFilter_Destroy(JPH_StateRecorderFilter* filter)
+{
+	if (filter)
+		delete reinterpret_cast<ManagedStateRecorderFilter*>(filter);
+}
+
+/* StateRecorder */
+JPH_StateRecorder* JPH_StateRecorder_Create()
+{
+	auto jolt_recorder = new JPH::StateRecorderImpl();
+	return reinterpret_cast<JPH_StateRecorder*>(jolt_recorder);
+}
+
+void JPH_StateRecorder_Destroy(JPH_StateRecorder* recorder)
+{
+	if (recorder)
+	{
+		delete reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	}
+}
+
+void JPH_StateRecorder_SetValidating(JPH_StateRecorder* recorder, bool validating)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	jolt_recorder->SetValidating(!!validating);
+}
+
+bool JPH_StateRecorder_IsValidating(JPH_StateRecorder* recorder)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	return jolt_recorder->IsValidating();
+}
+
+void JPH_StateRecorder_Rewind(JPH_StateRecorder* recorder)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	jolt_recorder->Rewind();
+}
+
+void JPH_StateRecorder_Clear(JPH_StateRecorder* recorder)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	jolt_recorder->Clear();
+}
+
+bool JPH_StateRecorder_IsEOF(JPH_StateRecorder* recorder)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	return jolt_recorder->IsEOF();
+}
+
+bool JPH_StateRecorder_IsFailed(JPH_StateRecorder* recorder)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	return jolt_recorder->IsFailed();
+}
+
+bool JPH_StateRecorder_IsEqual(JPH_StateRecorder* recorder, JPH_StateRecorder* other)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	auto jolt_other = reinterpret_cast<JPH::StateRecorderImpl*>(other);
+	return jolt_recorder->IsEqual(*jolt_other);
+}
+
+void JPH_StateRecorder_WriteBytes(JPH_StateRecorder* recorder, const void* data, size_t size)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	jolt_recorder->WriteBytes(data, size);
+}
+
+void JPH_StateRecorder_ReadBytes(JPH_StateRecorder* recorder, void* data, size_t size)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	jolt_recorder->ReadBytes(data, size);
+}
+
+size_t JPH_StateRecorder_GetSize(JPH_StateRecorder* recorder)
+{
+	auto jolt_recorder = reinterpret_cast<JPH::StateRecorderImpl*>(recorder);
+	return jolt_recorder->GetData().size();
 }
 
 JPH_SUPPRESS_WARNING_POP
