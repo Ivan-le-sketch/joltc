@@ -2014,6 +2014,30 @@ JPH_CAPI bool JPH_NarrowPhaseQuery_CastShape2(const JPH_NarrowPhaseQuery* query,
 	const JPH_BodyFilter* bodyFilter,
 	const JPH_ShapeFilter* shapeFilter);
 
+JPH_CAPI bool JPH_NarrowPhaseQuery_CastShapeIgnoreInitialOverlap(const JPH_NarrowPhaseQuery* query,
+	const JPH_Shape* shape,
+	const JPH_RMatrix4x4* worldTransform, const JPH_Vec3* direction,
+	const JPH_ShapeCastSettings* settings,
+	JPH_RVec3* baseOffset,
+	JPH_CastShapeCollectorCallback* callback, void* userData,
+	JPH_BroadPhaseLayerFilter* broadPhaseLayerFilter,
+	JPH_ObjectLayerFilter* objectLayerFilter,
+	const JPH_BodyFilter* bodyFilter,
+	const JPH_ShapeFilter* shapeFilter);
+
+JPH_CAPI bool JPH_NarrowPhaseQuery_CastShapeIgnoreInitialOverlap2(const JPH_NarrowPhaseQuery* query,
+	const JPH_Shape* shape,
+	const JPH_RMatrix4x4* worldTransform, const JPH_Vec3* direction,
+	const JPH_ShapeCastSettings* settings,
+	JPH_RVec3* baseOffset,
+	JPH_CollisionCollectorType collectorType,
+	JPH_CastShapeResultCallback* callback, void* userData,
+	JPH_BroadPhaseLayerFilter* broadPhaseLayerFilter,
+	JPH_ObjectLayerFilter* objectLayerFilter,
+	const JPH_BodyFilter* bodyFilter,
+	const JPH_ShapeFilter* shapeFilter);
+
+
 //--------------------------------------------------------------------------------------------------
 // JPH_Body
 //--------------------------------------------------------------------------------------------------

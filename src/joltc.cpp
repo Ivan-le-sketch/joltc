@@ -6120,6 +6120,90 @@ public:
 	uint32_t _padding;
 };
 
+class CastShapeIgnoreInitialOverlapCollectorCallback final : public CastShapeCollector
+{
+public:
+	CastShapeIgnoreInitialOverlapCollectorCallback(JPH_CastShapeCollectorCallback* proc_, void* userData_)
+		: proc(proc_)
+		, userData(userData_)
+	{
+	}
+
+	void AddHit(const ShapeCastResult& result) override
+	{
+		if (result.mFraction <= 0.0f)
+			return;
+
+		JPH_ShapeCastResult hit{};
+		FromJolt(result.mContactPointOn1, &hit.contactPointOn1);
+		FromJolt(result.mContactPointOn2, &hit.contactPointOn2);
+		FromJolt(result.mPenetrationAxis, &hit.penetrationAxis);
+		hit.penetrationDepth = result.mPenetrationDepth;
+		hit.subShapeID1 = result.mSubShapeID1.GetValue();
+		hit.subShapeID2 = result.mSubShapeID2.GetValue();
+		hit.bodyID2 = result.mBodyID2.GetIndexAndSequenceNumber();
+		hit.fraction = result.mFraction;
+		hit.isBackFaceHit = result.mIsBackFaceHit;
+
+		float fraction = proc(userData, &hit);
+		UpdateEarlyOutFraction(fraction);
+		hadHit = true;
+	}
+
+	JPH_CastShapeCollectorCallback* proc;
+	void* userData;
+	bool hadHit = false;
+	uint32_t _padding;
+};
+
+class CastShapeIgnoreInitialOverlapAllHitCollisionCollector : public AllHitCollisionCollector<CastShapeCollector>
+{
+public:
+	void AddHit(const ShapeCastResult& result) override
+	{
+		if (result.mFraction <= 0.0f)
+			return;
+
+		AllHitCollisionCollector<CastShapeCollector>::AddHit(result);
+	}
+};
+
+class CastShapeIgnoreInitialOverlapClosestHitCollisionCollector : public ClosestHitCollisionCollector<CastShapeCollector>
+{
+public:
+	void AddHit(const ShapeCastResult& result) override
+	{
+		if (result.mFraction <= 0.0f)
+			return;
+
+		ClosestHitCollisionCollector<CastShapeCollector>::AddHit(result);
+	}
+};
+
+class CastShapeIgnoreInitialOverlapClosestHitPerBodyCollisionCollector : public ClosestHitPerBodyCollisionCollector<CastShapeCollector>
+{
+public:
+	void AddHit(const ShapeCastResult& result) override
+	{
+		if (result.mFraction <= 0.0f)
+			return;
+
+		ClosestHitPerBodyCollisionCollector<CastShapeCollector>::AddHit(result);
+	}
+};
+
+class CastShapeIgnoreInitialOverlapAnyHitCollisionCollector : public AnyHitCollisionCollector<CastShapeCollector>
+{
+public:
+	void AddHit(const ShapeCastResult& result) override
+	{
+		if (result.mFraction <= 0.0f)
+			return;
+
+		AnyHitCollisionCollector<CastShapeCollector>::AddHit(result);
+	}
+};
+
 bool JPH_NarrowPhaseQuery_CastRay(const JPH_NarrowPhaseQuery* query,
 	const JPH_RVec3* origin, const JPH_Vec3* direction,
 	JPH_RayCastResult* hit,
@@ -7032,6 +7116,212 @@ bool JPH_NarrowPhaseQuery_CastShape2(const JPH_NarrowPhaseQuery* query,
 
 		default:
 			return false;
+	}
+}
+
+bool JPH_NarrowPhaseQuery_CastShapeIgnoreInitialOverlap(const JPH_NarrowPhaseQuery* query,
+	const JPH_Shape* shape,
+	const JPH_RMatrix4x4* worldTransform, const JPH_Vec3* direction,
+	const JPH_ShapeCastSettings* settings,
+	JPH_RVec3* baseOffset,
+	JPH_CastShapeCollectorCallback* callback, void* userData,
+	JPH_BroadPhaseLayerFilter* broadPhaseLayerFilter,
+	JPH_ObjectLayerFilter* objectLayerFilter,
+	const JPH_BodyFilter* bodyFilter,
+	const JPH_ShapeFilter* shapeFilter)
+{
+	JPH_ASSERT(query && shape && worldTransform && direction && callback);
+
+	RShapeCast shapeCast = RShapeCast::sFromWorldTransform(
+		AsShape(shape),
+		JPH::Vec3(1.f, 1.f, 1.f), // scale can be embedded in worldTransform
+		ToJolt(worldTransform),
+		ToJolt(direction));
+
+	ShapeCastSettings joltSettings = ToJolt(settings);
+
+	auto joltBaseOffset = ToJolt(baseOffset);
+	CastShapeIgnoreInitialOverlapCollectorCallback collector(callback, userData);
+
+	AsNarrowPhaseQuery(query)->CastShape(
+		shapeCast,
+		joltSettings,
+		joltBaseOffset,
+		collector,
+		ToJolt(broadPhaseLayerFilter),
+		ToJolt(objectLayerFilter),
+		ToJolt(bodyFilter),
+		ToJolt(shapeFilter)
+	);
+
+	return collector.hadHit;
+}
+
+bool JPH_NarrowPhaseQuery_CastShapeIgnoreInitialOverlap2(const JPH_NarrowPhaseQuery* query,
+	const JPH_Shape* shape,
+	const JPH_RMatrix4x4* worldTransform, const JPH_Vec3* direction,
+	const JPH_ShapeCastSettings* settings,
+	JPH_RVec3* baseOffset,
+	JPH_CollisionCollectorType collectorType,
+	JPH_CastShapeResultCallback* callback, void* userData,
+	JPH_BroadPhaseLayerFilter* broadPhaseLayerFilter,
+	JPH_ObjectLayerFilter* objectLayerFilter,
+	const JPH_BodyFilter* bodyFilter,
+	const JPH_ShapeFilter* shapeFilter)
+{
+	JPH_ASSERT(query && shape && worldTransform && direction && callback);
+
+	RShapeCast shapeCast = RShapeCast::sFromWorldTransform(
+		AsShape(shape),
+		JPH::Vec3(1.f, 1.f, 1.f), // scale can be embedded in worldTransform
+		ToJolt(worldTransform),
+		ToJolt(direction));
+
+	ShapeCastSettings joltSettings = ToJolt(settings);
+
+	auto joltBaseOffset = ToJolt(baseOffset);
+
+	JPH_ShapeCastResult result{};
+
+	switch (collectorType)
+	{
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		CastShapeIgnoreInitialOverlapAllHitCollisionCollector collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
+			{
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
+				callback(userData, &result);
+			}
+		}
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		CastShapeIgnoreInitialOverlapClosestHitCollisionCollector collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		CastShapeIgnoreInitialOverlapClosestHitPerBodyCollisionCollector collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
+			{
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
+				callback(userData, &result);
+			}
+		}
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		CastShapeIgnoreInitialOverlapAnyHitCollisionCollector collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
