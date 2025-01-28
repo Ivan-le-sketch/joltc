@@ -5549,7 +5549,27 @@ bool JPH_BroadPhaseQuery_CastRay2(const JPH_BroadPhaseQuery* query,
 
 			return collector.HadHit();
 		}
+		case JPH_CollisionCollectorType_ClosestHitPerBody:
+		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+		{
+			ClosestHitPerBodyCollisionCollector<RayCastBodyCollector> collector;
+			AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
 
+			if (collector.HadHit())
+			{
+				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+					collector.Sort();
+
+				for (auto& hit : collector.mHits)
+				{
+					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+					hitResult.fraction = hit.mFraction;
+					callback(userData, &hitResult);
+				}
+			}
+
+			return collector.HadHit();
+		}
 		case JPH_CollisionCollectorType_AnyHit:
 		{
 			AnyHitCollisionCollector<RayCastBodyCollector> collector;
@@ -5847,7 +5867,36 @@ bool JPH_NarrowPhaseQuery_CastRay3(const JPH_NarrowPhaseQuery* query,
 
 			return collector.HadHit();
 		}
+		case JPH_CollisionCollectorType_ClosestHitPerBody:
+		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+		{
+			ClosestHitPerBodyCollisionCollector<CastRayCollector> collector;
+			AsNarrowPhaseQuery(query)->CastRay(
+				ray,
+				raySettings,
+				collector,
+				ToJolt(broadPhaseLayerFilter),
+				ToJolt(objectLayerFilter),
+				ToJolt(bodyFilter),
+				ToJolt(shapeFilter)
+			);
 
+			if (collector.HadHit())
+			{
+				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+					collector.Sort();
+
+				for (auto& hit : collector.mHits)
+				{
+					hitResult.fraction = hit.mFraction;
+					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+					hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
+					callback(userData, &hitResult);
+				}
+			}
+
+			return collector.HadHit();
+		}
 		case JPH_CollisionCollectorType_AnyHit:
 		{
 			AnyHitCollisionCollector<CastRayCollector> collector;
@@ -5963,7 +6012,34 @@ bool JPH_NarrowPhaseQuery_CollidePoint2(const JPH_NarrowPhaseQuery* query,
 
 			return collector.HadHit();
 		}
+		case JPH_CollisionCollectorType_ClosestHitPerBody:
+		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+		{
+			ClosestHitPerBodyCollisionCollector<CollidePointCollector> collector;
+			AsNarrowPhaseQuery(query)->CollidePoint(
+				joltPoint,
+				collector,
+				ToJolt(broadPhaseLayerFilter),
+				ToJolt(objectLayerFilter),
+				ToJolt(bodyFilter),
+				ToJolt(shapeFilter)
+			);
 
+			if (collector.HadHit())
+			{
+				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+					collector.Sort();
+
+				for (auto& hit : collector.mHits)
+				{
+					result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+					result.subShapeID2 = hit.mSubShapeID2.GetValue();
+					callback(userData, &result);
+				}
+			}
+
+			return collector.HadHit();
+		}
 		case JPH_CollisionCollectorType_AnyHit:
 		{
 			AnyHitCollisionCollector<CollidePointCollector> collector;
@@ -6106,7 +6182,43 @@ bool JPH_NarrowPhaseQuery_CollideShape2(const JPH_NarrowPhaseQuery* query,
 
 			return collector.HadHit();
 		}
+		case JPH_CollisionCollectorType_ClosestHitPerBody:
+		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+		{
+			ClosestHitPerBodyCollisionCollector<CollideShapeCollector> collector;
+			AsNarrowPhaseQuery(query)->CollideShape(
+				AsShape(shape),
+				joltScale,
+				joltTransform,
+				joltSettings,
+				joltBaseOffset,
+				collector,
+				ToJolt(broadPhaseLayerFilter),
+				ToJolt(objectLayerFilter),
+				ToJolt(bodyFilter),
+				ToJolt(shapeFilter)
+			);
 
+			if (collector.HadHit())
+			{
+				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+					collector.Sort();
+
+				for (auto& hit : collector.mHits)
+				{
+					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+					result.penetrationDepth = hit.mPenetrationDepth;
+					result.subShapeID1 = hit.mSubShapeID1.GetValue();
+					result.subShapeID2 = hit.mSubShapeID2.GetValue();
+					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+					callback(userData, &result);
+				}
+			}
+
+			return collector.HadHit();
+		}
 		case JPH_CollisionCollectorType_AnyHit:
 		{
 			AnyHitCollisionCollector<CollideShapeCollector> collector;
@@ -6270,7 +6382,43 @@ bool JPH_NarrowPhaseQuery_CastShape2(const JPH_NarrowPhaseQuery* query,
 
 			return collector.HadHit();
 		}
+		case JPH_CollisionCollectorType_ClosestHitPerBody:
+		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+		{
+			ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
+			AsNarrowPhaseQuery(query)->CastShape(
+				shapeCast,
+				joltSettings,
+				joltBaseOffset,
+				collector,
+				ToJolt(broadPhaseLayerFilter),
+				ToJolt(objectLayerFilter),
+				ToJolt(bodyFilter),
+				ToJolt(shapeFilter)
+			);
 
+			if (collector.HadHit())
+			{
+				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+					collector.Sort();
+
+				for (auto& hit : collector.mHits)
+				{
+					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+					result.penetrationDepth = hit.mPenetrationDepth;
+					result.subShapeID1 = hit.mSubShapeID1.GetValue();
+					result.subShapeID2 = hit.mSubShapeID2.GetValue();
+					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+					result.fraction = hit.mFraction;
+					result.isBackFaceHit = hit.mIsBackFaceHit;
+					callback(userData, &result);
+				}
+			}
+
+			return collector.HadHit();
+		}
 		case JPH_CollisionCollectorType_AnyHit:
 		{
 			AnyHitCollisionCollector<CastShapeCollector> collector;
