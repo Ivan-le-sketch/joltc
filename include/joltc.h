@@ -359,7 +359,9 @@ typedef enum JPH_CollisionCollectorType {
 	JPH_CollisionCollectorType_AllHit = 0,
 	JPH_CollisionCollectorType_AllHitSorted = 1,
 	JPH_CollisionCollectorType_ClosestHit = 2,
-	JPH_CollisionCollectorType_AnyHit = 3,
+	JPH_CollisionCollectorType_ClosestHitPerBody = 3,
+	JPH_CollisionCollectorType_ClosestHitPerBodySorted = 4,
+	JPH_CollisionCollectorType_AnyHit = 5,
 
 	_JPH_CollisionCollectorType_Count,
 	_JPH_CollisionCollectorType_Force32 = 0x7FFFFFFF
