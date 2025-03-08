@@ -2165,7 +2165,7 @@ JPH_CAPI void JPH_BroadPhaseLayerFilter_Destroy(JPH_BroadPhaseLayerFilter* filte
 
 /* JPH_ObjectLayerFilter */
 typedef struct JPH_ObjectLayerFilter_Procs {
-	bool(JPH_API_CALL* ShouldCollide)(void* userData, JPH_ObjectLayer layer);
+	bool(JPH_API_CALL* ShouldCollide)(void* userData, JPH_ObjectLayer* layer);
 } JPH_ObjectLayerFilter_Procs;
 
 JPH_CAPI void JPH_ObjectLayerFilter_SetProcs(const JPH_ObjectLayerFilter_Procs* procs);
