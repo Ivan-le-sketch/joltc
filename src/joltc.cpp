@@ -643,6 +643,77 @@ private:
 	JPH_JobSystemConfig mConfig;
 };
 
+// ------------------------
+// IL2CPP Thread Attach API
+// ------------------------
+
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#else
+#include <dlfcn.h>
+#endif
+
+static void* (*il2cpp_domain_get_func)() = nullptr;
+static void* (*il2cpp_thread_attach_func)(void*) = nullptr;
+static void  (*il2cpp_thread_detach_func)(void*) = nullptr;
+
+static void ResolveIL2CPPSymbols()
+{
+	static bool resolved = false;
+	if (resolved) return;
+	resolved = true;
+
+#if defined(_WIN32)
+	HMODULE lib = GetModuleHandleA("GameAssembly.dll");
+	if (!lib) return;
+	il2cpp_domain_get_func = (void* (*)())GetProcAddress(lib, "il2cpp_domain_get");
+	il2cpp_thread_attach_func = (void* (*)(void*))GetProcAddress(lib, "il2cpp_thread_attach");
+	il2cpp_thread_detach_func = (void(*)(void*))GetProcAddress(lib, "il2cpp_thread_detach");
+#else
+	void* handle = dlopen(nullptr, RTLD_LAZY);
+	il2cpp_domain_get_func = (void* (*)())dlsym(handle, "il2cpp_domain_get");
+	il2cpp_thread_attach_func = (void* (*)(void*))dlsym(handle, "il2cpp_thread_attach");
+	il2cpp_thread_detach_func = (void(*)(void*))dlsym(handle, "il2cpp_thread_detach");
+#endif
+}
+
+#include <thread>
+#include <unordered_map>
+#include <mutex>
+
+static std::mutex g_threadMapMutex;
+static std::unordered_map<std::thread::id, void*> g_il2cppThreads;
+
+static void AttachIL2CPPThread()
+{
+	ResolveIL2CPPSymbols();
+	if (!il2cpp_domain_get_func || !il2cpp_thread_attach_func)
+		return;
+
+	void* domain = il2cpp_domain_get_func();
+	void* thread = il2cpp_thread_attach_func(domain);
+
+	std::lock_guard<std::mutex> lock(g_threadMapMutex);
+	g_il2cppThreads[std::this_thread::get_id()] = thread;
+}
+
+static void DetachIL2CPPThread()
+{
+	if (!il2cpp_thread_detach_func)
+		return;
+
+	std::lock_guard<std::mutex> lock(g_threadMapMutex);
+	auto it = g_il2cppThreads.find(std::this_thread::get_id());
+	if (it != g_il2cppThreads.end())
+	{
+		il2cpp_thread_detach_func(it->second);
+		g_il2cppThreads.erase(it);
+	}
+}
+
 JPH_JobSystem* JPH_JobSystemThreadPool_Create(const JobSystemThreadPoolConfig* config)
 {
 	JobSystemThreadPoolConfig createConfig{};
@@ -652,7 +723,22 @@ JPH_JobSystem* JPH_JobSystemThreadPool_Create(const JobSystemThreadPoolConfig* c
 	uint32_t maxJobs = createConfig.maxJobs > 0 ? createConfig.maxJobs : JPH::cMaxPhysicsJobs;
 	uint32_t maxBarriers = createConfig.maxBarriers > 0 ? createConfig.maxBarriers : JPH::cMaxPhysicsBarriers;
 	int32_t numThreads = createConfig.numThreads > 0 ? createConfig.numThreads : -1;
-	JPH::JobSystem* jobSystem = new JPH::JobSystemThreadPool(maxJobs, maxBarriers, numThreads);
+	auto* jobSystem = new JPH::JobSystemThreadPool();
+
+	// Set IL2CPP thread attach function
+	jobSystem->SetThreadInitFunction([](int threadIndex)
+		{
+			AttachIL2CPPThread();
+		});
+
+	// Set IL2CPP thread detach function
+	jobSystem->SetThreadExitFunction([](int threadIndex)
+		{
+			DetachIL2CPPThread();
+		});
+
+	jobSystem->Init(maxJobs, maxBarriers, numThreads);
+
 	return reinterpret_cast<JPH_JobSystem*>(jobSystem);
 }
 
@@ -2099,62 +2185,62 @@ bool JPH_Shape_CastRay2(const JPH_Shape* shape, const JPH_Vec3* origin, const JP
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CastRayCollector> collector;
+		AsShape(shape)->CastRay(ray, settings, creator, collector, ToJolt(shapeFilter));
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CastRayCollector> collector;
-			AsShape(shape)->CastRay(ray, settings, creator, collector, ToJolt(shapeFilter));
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					hitResult.fraction = hit.mFraction;
-					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
-					callback(userData, &hitResult);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CastRayCollector> collector;
-			AsShape(shape)->CastRay(ray, settings, creator, collector, ToJolt(shapeFilter));
-
-			if (collector.HadHit())
-			{
-				hitResult.fraction = collector.mHit.mFraction;
-				hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+				hitResult.fraction = hit.mFraction;
+				hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
 				callback(userData, &hitResult);
 			}
-
-			return collector.HadHit();
 		}
 
-		case JPH_CollisionCollectorType_AnyHit:
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CastRayCollector> collector;
+		AsShape(shape)->CastRay(ray, settings, creator, collector, ToJolt(shapeFilter));
+
+		if (collector.HadHit())
 		{
-			AnyHitCollisionCollector<CastRayCollector> collector;
-			AsShape(shape)->CastRay(ray, settings, creator, collector, ToJolt(shapeFilter));
-
-			if (collector.HadHit())
-			{
-				hitResult.fraction = collector.mHit.mFraction;
-				hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				callback(userData, &hitResult);
-			}
-
-			return collector.HadHit();
+			hitResult.fraction = collector.mHit.mFraction;
+			hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &hitResult);
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CastRayCollector> collector;
+		AsShape(shape)->CastRay(ray, settings, creator, collector, ToJolt(shapeFilter));
+
+		if (collector.HadHit())
+		{
+			hitResult.fraction = collector.mHit.mFraction;
+			hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &hitResult);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -2179,59 +2265,59 @@ bool JPH_Shape_CollidePoint2(const JPH_Shape* shape, const JPH_Vec3* point,
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CollidePointCollector> collector;
+		AsShape(shape)->CollidePoint(joltPoint, creator, collector, ToJolt(shapeFilter));
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CollidePointCollector> collector;
-			AsShape(shape)->CollidePoint(joltPoint, creator, collector, ToJolt(shapeFilter));
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CollidePointCollector> collector;
-			AsShape(shape)->CollidePoint(joltPoint, creator, collector, ToJolt(shapeFilter));
-
-			if (collector.HadHit())
-			{
-				result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+				result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		case JPH_CollisionCollectorType_AnyHit:
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CollidePointCollector> collector;
+		AsShape(shape)->CollidePoint(joltPoint, creator, collector, ToJolt(shapeFilter));
+
+		if (collector.HadHit())
 		{
-			AnyHitCollisionCollector<CollidePointCollector> collector;
-			AsShape(shape)->CollidePoint(joltPoint, creator, collector, ToJolt(shapeFilter));
-
-			if (collector.HadHit())
-			{
-				result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				callback(userData, &result);
-			}
-
-			return collector.HadHit();
+			result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &result);
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CollidePointCollector> collector;
+		AsShape(shape)->CollidePoint(joltPoint, creator, collector, ToJolt(shapeFilter));
+
+		if (collector.HadHit())
+		{
+			result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -5924,79 +6010,79 @@ bool JPH_BroadPhaseQuery_CastRay2(const JPH_BroadPhaseQuery* query,
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<RayCastBodyCollector> collector;
+		AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<RayCastBodyCollector> collector;
-			AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					hitResult.fraction = hit.mFraction;
-					callback(userData, &hitResult);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<RayCastBodyCollector> collector;
-			AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
-
-			if (collector.HadHit())
-			{
-				hitResult.fraction = collector.mHit.mFraction;
-				hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+				hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				hitResult.fraction = hit.mFraction;
 				callback(userData, &hitResult);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<RayCastBodyCollector> collector;
+		AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<RayCastBodyCollector> collector;
-			AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					hitResult.fraction = hit.mFraction;
-					callback(userData, &hitResult);
-				}
-			}
-
-			return collector.HadHit();
+			hitResult.fraction = collector.mHit.mFraction;
+			hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			callback(userData, &hitResult);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<RayCastBodyCollector> collector;
-			AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<RayCastBodyCollector> collector;
+		AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				hitResult.fraction = collector.mHit.mFraction;
+				hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				hitResult.fraction = hit.mFraction;
 				callback(userData, &hitResult);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<RayCastBodyCollector> collector;
+		AsBroadPhaseQuery(query)->CastRay(ray, collector, ToJolt(broadPhaseLayerFilter), ToJolt(objectLayerFilter));
+
+		if (collector.HadHit())
+		{
+			hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			hitResult.fraction = collector.mHit.mFraction;
+			callback(userData, &hitResult);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -6308,115 +6394,115 @@ bool JPH_NarrowPhaseQuery_CastRay3(const JPH_NarrowPhaseQuery* query,
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CastRayCollector> collector;
+		AsNarrowPhaseQuery(query)->CastRay(
+			ray,
+			raySettings,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CastRayCollector> collector;
-			AsNarrowPhaseQuery(query)->CastRay(
-				ray,
-				raySettings,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					hitResult.fraction = hit.mFraction;
-					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
-					callback(userData, &hitResult);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CastRayCollector> collector;
-			AsNarrowPhaseQuery(query)->CastRay(
-				ray,
-				raySettings,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				hitResult.fraction = collector.mHit.mFraction;
-				hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+				hitResult.fraction = hit.mFraction;
+				hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
 				callback(userData, &hitResult);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CastRayCollector> collector;
+		AsNarrowPhaseQuery(query)->CastRay(
+			ray,
+			raySettings,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CastRayCollector> collector;
-			AsNarrowPhaseQuery(query)->CastRay(
-				ray,
-				raySettings,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					hitResult.fraction = hit.mFraction;
-					hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
-					callback(userData, &hitResult);
-				}
-			}
-
-			return collector.HadHit();
+			hitResult.fraction = collector.mHit.mFraction;
+			hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &hitResult);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CastRayCollector> collector;
-			AsNarrowPhaseQuery(query)->CastRay(
-				ray,
-				raySettings,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CastRayCollector> collector;
+		AsNarrowPhaseQuery(query)->CastRay(
+			ray,
+			raySettings,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				hitResult.fraction = collector.mHit.mFraction;
-				hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+				hitResult.fraction = hit.mFraction;
+				hitResult.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				hitResult.subShapeID2 = hit.mSubShapeID2.GetValue();
 				callback(userData, &hitResult);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CastRayCollector> collector;
+		AsNarrowPhaseQuery(query)->CastRay(
+			ray,
+			raySettings,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			hitResult.fraction = collector.mHit.mFraction;
+			hitResult.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			hitResult.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &hitResult);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -6457,107 +6543,107 @@ bool JPH_NarrowPhaseQuery_CollidePoint2(const JPH_NarrowPhaseQuery* query,
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CollidePointCollector> collector;
+		AsNarrowPhaseQuery(query)->CollidePoint(
+			joltPoint,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CollidePointCollector> collector;
-			AsNarrowPhaseQuery(query)->CollidePoint(
-				joltPoint,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CollidePointCollector> collector;
-			AsNarrowPhaseQuery(query)->CollidePoint(
-				joltPoint,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+				result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CollidePointCollector> collector;
+		AsNarrowPhaseQuery(query)->CollidePoint(
+			joltPoint,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CollidePointCollector> collector;
-			AsNarrowPhaseQuery(query)->CollidePoint(
-				joltPoint,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
+			result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &result);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CollidePointCollector> collector;
-			AsNarrowPhaseQuery(query)->CollidePoint(
-				joltPoint,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CollidePointCollector> collector;
+		AsNarrowPhaseQuery(query)->CollidePoint(
+			joltPoint,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+				result.bodyID = hit.mBodyID.GetIndexAndSequenceNumber();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CollidePointCollector> collector;
+		AsNarrowPhaseQuery(query)->CollidePoint(
+			joltPoint,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			result.bodyID = collector.mHit.mBodyID.GetIndexAndSequenceNumber();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -6621,125 +6707,125 @@ bool JPH_NarrowPhaseQuery_CollideShape2(const JPH_NarrowPhaseQuery* query,
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CollideShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CollideShape(
+			AsShape(shape),
+			joltScale,
+			joltTransform,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CollideShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CollideShape(
-				AsShape(shape),
-				joltScale,
-				joltTransform,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					result = FromJolt(hit);
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CollideShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CollideShape(
-				AsShape(shape),
-				joltScale,
-				joltTransform,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				result = FromJolt(collector.mHit);
+				result = FromJolt(hit);
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CollideShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CollideShape(
+			AsShape(shape),
+			joltScale,
+			joltTransform,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CollideShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CollideShape(
-				AsShape(shape),
-				joltScale,
-				joltTransform,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
+			result = FromJolt(collector.mHit);
+			callback(userData, &result);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CollideShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CollideShape(
-				AsShape(shape),
-				joltScale,
-				joltTransform,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CollideShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CollideShape(
+			AsShape(shape),
+			joltScale,
+			joltTransform,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				result = FromJolt(collector.mHit);
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CollideShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CollideShape(
+			AsShape(shape),
+			joltScale,
+			joltTransform,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			result = FromJolt(collector.mHit);
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -7009,143 +7095,143 @@ bool JPH_NarrowPhaseQuery_CastShape2(const JPH_NarrowPhaseQuery* query,
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CastShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CastShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CastShape(
-				shapeCast,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					result.fraction = hit.mFraction;
-					result.isBackFaceHit = hit.mIsBackFaceHit;
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CastShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CastShape(
-				shapeCast,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
-				result.fraction = collector.mHit.mFraction;
-				result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CastShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CastShape(
-				shapeCast,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					result.fraction = hit.mFraction;
-					result.isBackFaceHit = hit.mIsBackFaceHit;
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CastShapeCollector> collector;
-			AsNarrowPhaseQuery(query)->CastShape(
-				shapeCast,
-				joltSettings,
-				joltBaseOffset,
-				collector,
-				ToJolt(broadPhaseLayerFilter),
-				ToJolt(objectLayerFilter),
-				ToJolt(bodyFilter),
-				ToJolt(shapeFilter)
-			);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
-				result.fraction = collector.mHit.mFraction;
-				result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CastShapeCollector> collector;
+		AsNarrowPhaseQuery(query)->CastShape(
+			shapeCast,
+			joltSettings,
+			joltBaseOffset,
+			collector,
+			ToJolt(broadPhaseLayerFilter),
+			ToJolt(objectLayerFilter),
+			ToJolt(bodyFilter),
+			ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -9203,127 +9289,127 @@ bool JPH_CollisionDispatch_CollideShapeVsShape2(
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CollideShapeCollector> collector;
+		CollisionDispatch::sCollideShapeVsShape(
+			AsShape(shape1), AsShape(shape2),
+			ToJolt(scale1), ToJolt(scale2),
+			ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CollideShapeCollector> collector;
-			CollisionDispatch::sCollideShapeVsShape(
-				AsShape(shape1), AsShape(shape2),
-				ToJolt(scale1), ToJolt(scale2),
-				ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
-			);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CollideShapeCollector> collector;
-			CollisionDispatch::sCollideShapeVsShape(
-				AsShape(shape1), AsShape(shape2),
-				ToJolt(scale1), ToJolt(scale2),
-				ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CollideShapeCollector> collector;
+		CollisionDispatch::sCollideShapeVsShape(
+			AsShape(shape1), AsShape(shape2),
+			ToJolt(scale1), ToJolt(scale2),
+			ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CollideShapeCollector> collector;
-			CollisionDispatch::sCollideShapeVsShape(
-				AsShape(shape1), AsShape(shape2),
-				ToJolt(scale1), ToJolt(scale2),
-				ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
-			);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			callback(userData, &result);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CollideShapeCollector> collector;
-			CollisionDispatch::sCollideShapeVsShape(
-				AsShape(shape1), AsShape(shape2),
-				ToJolt(scale1), ToJolt(scale2),
-				ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
-			);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CollideShapeCollector> collector;
+		CollisionDispatch::sCollideShapeVsShape(
+			AsShape(shape1), AsShape(shape2),
+			ToJolt(scale1), ToJolt(scale2),
+			ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CollideShapeCollector> collector;
+		CollisionDispatch::sCollideShapeVsShape(
+			AsShape(shape1), AsShape(shape2),
+			ToJolt(scale1), ToJolt(scale2),
+			ToJolt(centerOfMassTransform1), ToJolt(centerOfMassTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			ToJolt(collideShapeSettings), collector, ToJolt(shapeFilter)
+		);
+
+		if (collector.HadHit())
+		{
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -9362,7 +9448,7 @@ bool JPH_CollisionDispatch_CastShapeVsShapeLocalSpace2(
 	JPH_CastShapeResultCallback* callback, void* userData,
 	const JPH_ShapeFilter* shapeFilter)
 {
-	JPH_ASSERT(direction && shape1 && shape2 && scale1InShape2LocalSpace && scale2 
+	JPH_ASSERT(direction && shape1 && shape2 && scale1InShape2LocalSpace && scale2
 		&& centerOfMassTransform1InShape2LocalSpace && centerOfMassWorldTransform2 && callback);
 
 	ShapeCast shapeCast(
@@ -9377,127 +9463,127 @@ bool JPH_CollisionDispatch_CastShapeVsShapeLocalSpace2(
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeLocalSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeLocalSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					result.fraction = hit.mFraction;
-					result.isBackFaceHit = hit.mIsBackFaceHit;
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeLocalSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
-
-			if (collector.HadHit())
-			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
-				result.fraction = collector.mHit.mFraction;
-				result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeLocalSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeLocalSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					result.fraction = hit.mFraction;
-					result.isBackFaceHit = hit.mIsBackFaceHit;
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeLocalSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeLocalSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
-				result.fraction = collector.mHit.mFraction;
-				result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeLocalSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
+		{
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
@@ -9551,127 +9637,127 @@ bool JPH_CollisionDispatch_CastShapeVsShapeWorldSpace2(
 
 	switch (collectorType)
 	{
-		case JPH_CollisionCollectorType_AllHit:
-		case JPH_CollisionCollectorType_AllHitSorted:
+	case JPH_CollisionCollectorType_AllHit:
+	case JPH_CollisionCollectorType_AllHitSorted:
+	{
+		AllHitCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeWorldSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
 		{
-			AllHitCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeWorldSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
+			if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
+				collector.Sort();
 
-			if (collector.HadHit())
+			for (auto& hit : collector.mHits)
 			{
-				if (collectorType == JPH_CollisionCollectorType_AllHitSorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					result.fraction = hit.mFraction;
-					result.isBackFaceHit = hit.mIsBackFaceHit;
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
-		}
-		case JPH_CollisionCollectorType_ClosestHit:
-		{
-			ClosestHitCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeWorldSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
-
-			if (collector.HadHit())
-			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
-				result.fraction = collector.mHit.mFraction;
-				result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
-		case JPH_CollisionCollectorType_ClosestHitPerBody:
-		case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHit:
+	{
+		ClosestHitCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeWorldSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
 		{
-			ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeWorldSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
-
-			if (collector.HadHit())
-			{
-				if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
-					collector.Sort();
-
-				for (auto& hit : collector.mHits)
-				{
-					FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
-					FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
-					FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
-					result.penetrationDepth = hit.mPenetrationDepth;
-					result.subShapeID1 = hit.mSubShapeID1.GetValue();
-					result.subShapeID2 = hit.mSubShapeID2.GetValue();
-					result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
-					result.fraction = hit.mFraction;
-					result.isBackFaceHit = hit.mIsBackFaceHit;
-					callback(userData, &result);
-				}
-			}
-
-			return collector.HadHit();
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
 		}
-		case JPH_CollisionCollectorType_AnyHit:
-		{
-			AnyHitCollisionCollector<CastShapeCollector> collector;
-			CollisionDispatch::sCastShapeVsShapeWorldSpace(
-				shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
-				ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
-				JPH::SubShapeIDCreator(),
-				JPH::SubShapeIDCreator(),
-				collector);
 
-			if (collector.HadHit())
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_ClosestHitPerBody:
+	case JPH_CollisionCollectorType_ClosestHitPerBodySorted:
+	{
+		ClosestHitPerBodyCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeWorldSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
+		{
+			if (collectorType == JPH_CollisionCollectorType_ClosestHitPerBodySorted)
+				collector.Sort();
+
+			for (auto& hit : collector.mHits)
 			{
-				FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
-				FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
-				FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
-				result.penetrationDepth = collector.mHit.mPenetrationDepth;
-				result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
-				result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
-				result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
-				result.fraction = collector.mHit.mFraction;
-				result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+				FromJolt(hit.mContactPointOn1, &result.contactPointOn1);
+				FromJolt(hit.mContactPointOn2, &result.contactPointOn2);
+				FromJolt(hit.mPenetrationAxis, &result.penetrationAxis);
+				result.penetrationDepth = hit.mPenetrationDepth;
+				result.subShapeID1 = hit.mSubShapeID1.GetValue();
+				result.subShapeID2 = hit.mSubShapeID2.GetValue();
+				result.bodyID2 = hit.mBodyID2.GetIndexAndSequenceNumber();
+				result.fraction = hit.mFraction;
+				result.isBackFaceHit = hit.mIsBackFaceHit;
 				callback(userData, &result);
 			}
-
-			return collector.HadHit();
 		}
 
-		default:
-			return false;
+		return collector.HadHit();
+	}
+	case JPH_CollisionCollectorType_AnyHit:
+	{
+		AnyHitCollisionCollector<CastShapeCollector> collector;
+		CollisionDispatch::sCastShapeVsShapeWorldSpace(
+			shapeCast, ToJolt(shapeCastSettings), AsShape(shape2),
+			ToJolt(scale2), ToJolt(shapeFilter), ToJolt(centerOfMassWorldTransform2),
+			JPH::SubShapeIDCreator(),
+			JPH::SubShapeIDCreator(),
+			collector);
+
+		if (collector.HadHit())
+		{
+			FromJolt(collector.mHit.mContactPointOn1, &result.contactPointOn1);
+			FromJolt(collector.mHit.mContactPointOn2, &result.contactPointOn2);
+			FromJolt(collector.mHit.mPenetrationAxis, &result.penetrationAxis);
+			result.penetrationDepth = collector.mHit.mPenetrationDepth;
+			result.subShapeID1 = collector.mHit.mSubShapeID1.GetValue();
+			result.subShapeID2 = collector.mHit.mSubShapeID2.GetValue();
+			result.bodyID2 = collector.mHit.mBodyID2.GetIndexAndSequenceNumber();
+			result.fraction = collector.mHit.mFraction;
+			result.isBackFaceHit = collector.mHit.mIsBackFaceHit;
+			callback(userData, &result);
+		}
+
+		return collector.HadHit();
+	}
+
+	default:
+		return false;
 	}
 }
 
