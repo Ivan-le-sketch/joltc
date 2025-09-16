@@ -2187,6 +2187,9 @@ JPH_CAPI void JPH_ObjectLayerFilter_SetProcs(const JPH_ObjectLayerFilter_Procs* 
 JPH_CAPI JPH_ObjectLayerFilter* JPH_ObjectLayerFilter_Create(void* userData);
 JPH_CAPI void JPH_ObjectLayerFilter_Destroy(JPH_ObjectLayerFilter* filter);
 
+JPH_CAPI JPH_ObjectLayerFilter* JPH_IncludeObjectLayerFilter_Create(JPH_ObjectLayer* layers, int32_t layerCount);
+JPH_CAPI JPH_ObjectLayerFilter* JPH_IgnoreObjectLayerFilter_Create(JPH_ObjectLayer* layers, int32_t layerCount);
+
 /* JPH_BodyFilter */
 typedef struct JPH_BodyFilter_Procs {
 	bool(JPH_API_CALL* ShouldCollide)(void* userData, JPH_BodyID bodyID);

@@ -1279,8 +1279,70 @@ void JPH_ObjectLayerFilter_Destroy(JPH_ObjectLayerFilter* filter)
 {
 	if (filter)
 	{
-		delete reinterpret_cast<ManagedObjectLayerFilter*>(filter);
+		delete reinterpret_cast<ObjectLayerFilter*>(filter);
 	}
+}
+
+/// Allows objects from specified layers
+class IncludeObjectLayerFilter : public ObjectLayerFilter
+{
+public:
+	/// Constructor
+	explicit IncludeObjectLayerFilter(ObjectLayer* inLayers, int32_t layerCount)
+	{
+		mLayerMask = 0;
+		for (int32_t i = 0; i < layerCount; ++i)
+		{
+			mLayerMask |= (1ULL << inLayers[i]);
+		}
+
+	}
+
+	// See ObjectLayerFilter::ShouldCollide
+	virtual bool ShouldCollide(ObjectLayer inLayer) const override
+	{
+		return (mLayerMask & (1ULL << inLayer)) != 0;
+	}
+
+private:
+	uint64_t mLayerMask;
+};
+
+JPH_ObjectLayerFilter* JPH_IncludeObjectLayerFilter_Create(JPH_ObjectLayer* layers, int32_t layerCount)
+{
+	auto filter = new IncludeObjectLayerFilter((JPH::ObjectLayer*)layers, layerCount);
+	return reinterpret_cast<JPH_ObjectLayerFilter*>(filter);
+}
+
+/// Ignores objects from specified layers
+class IgnoreObjectLayerFilter : public ObjectLayerFilter
+{
+public:
+	/// Constructor
+	explicit IgnoreObjectLayerFilter(ObjectLayer* inLayers, int32_t layerCount)
+	{
+		mLayerMask = 0;
+		for (int32_t i = 0; i < layerCount; ++i)
+		{
+			mLayerMask |= (1ULL << inLayers[i]);
+		}
+
+	}
+
+	// See ObjectLayerFilter::ShouldCollide
+	virtual bool ShouldCollide(ObjectLayer inLayer) const override
+	{
+		return (mLayerMask & (1ULL << inLayer)) == 0;
+	}
+
+private:
+	uint64_t mLayerMask;
+};
+
+JPH_ObjectLayerFilter* JPH_IgnoreObjectLayerFilter_Create(JPH_ObjectLayer* layers, int32_t layerCount)
+{
+	auto filter = new IgnoreObjectLayerFilter((JPH::ObjectLayer*)layers, layerCount);
+	return reinterpret_cast<JPH_ObjectLayerFilter*>(filter);
 }
 
 /* JPH_BodyFilter */
