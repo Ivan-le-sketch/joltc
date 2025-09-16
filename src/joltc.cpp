@@ -1352,60 +1352,45 @@ static const JPH::BodyFilter& ToJolt(const JPH_BodyFilter* bodyFilter)
 	return bodyFilter ? *reinterpret_cast<const JPH::BodyFilter*>(bodyFilter) : g_defaultBodyFilter;
 }
 
-class ManagedBodyFilter final : public JPH::BodyFilter
-{
-public:
-	static const JPH_BodyFilter_Procs* s_Procs;
-	void* userData = nullptr;
-
-	ManagedBodyFilter(void* userData_)
-		: userData(userData_)
-	{
-
-	}
-
-	bool ShouldCollide(const BodyID& bodyID) const override
-	{
-		if (s_Procs != nullptr
-			&& s_Procs->ShouldCollide)
-		{
-			return s_Procs->ShouldCollide(userData, (JPH_BodyID)bodyID.GetIndexAndSequenceNumber());
-		}
-
-		return true;
-	}
-
-	bool ShouldCollideLocked(const Body& body) const override
-	{
-		if (s_Procs != nullptr
-			&& s_Procs->ShouldCollideLocked)
-		{
-			return s_Procs->ShouldCollideLocked(userData, reinterpret_cast<const JPH_Body*>(&body));
-		}
-
-		return true;
-	}
-};
-
-const JPH_BodyFilter_Procs* ManagedBodyFilter::s_Procs = nullptr;
-
-void JPH_BodyFilter_SetProcs(const JPH_BodyFilter_Procs* procs)
-{
-	ManagedBodyFilter::s_Procs = procs;
-}
-
-JPH_BodyFilter* JPH_BodyFilter_Create(void* userData)
-{
-	auto filter = new ManagedBodyFilter(userData);
-	return reinterpret_cast<JPH_BodyFilter*>(filter);
-}
-
 void JPH_BodyFilter_Destroy(JPH_BodyFilter* filter)
 {
 	if (filter)
 	{
-		delete reinterpret_cast<ManagedBodyFilter*>(filter);
+		delete reinterpret_cast<BodyFilter*>(filter);
 	}
+}
+
+JPH_IgnoreSingleBodyFilter* JPH_IgnoreSingleBodyFilter_Create(const JPH_BodyID bodyID)
+{
+	auto filter = new JPH::IgnoreSingleBodyFilter(JPH::BodyID(bodyID));
+	return reinterpret_cast<JPH_IgnoreSingleBodyFilter*>(filter);
+}
+
+JPH_IgnoreMultipleBodiesFilter* JPH_IgnoreMultipleBodiesFilter_Create()
+{
+	auto filter = new JPH::IgnoreMultipleBodiesFilter();
+	return reinterpret_cast<JPH_IgnoreMultipleBodiesFilter*>(filter);
+}
+
+void JPH_IgnoreMultipleBodiesFilter_Reserve(JPH_IgnoreMultipleBodiesFilter* filter, uint32_t size)
+{
+	JPH_ASSERT(filter);
+
+	reinterpret_cast<JPH::IgnoreMultipleBodiesFilter*>(filter)->Reserve(size);
+}
+
+void JPH_IgnoreMultipleBodiesFilter_Clear(JPH_IgnoreMultipleBodiesFilter* filter)
+{
+	JPH_ASSERT(filter);
+
+	reinterpret_cast<JPH::IgnoreMultipleBodiesFilter*>(filter)->Clear();
+}
+
+void JPH_IgnoreMultipleBodiesFilter_IgnoreBody(JPH_IgnoreMultipleBodiesFilter* filter, JPH_BodyID bodyID)
+{
+	JPH_ASSERT(filter);
+
+	reinterpret_cast<JPH::IgnoreMultipleBodiesFilter*>(filter)->IgnoreBody(JPH::BodyID(bodyID));
 }
 
 /* JPH_ShapeFilter */
