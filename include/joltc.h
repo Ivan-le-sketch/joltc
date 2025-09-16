@@ -2160,7 +2160,7 @@ JPH_CAPI uint64_t JPH_Body_GetUserData(JPH_Body* body);
 
 JPH_CAPI JPH_Body* JPH_Body_GetFixedToWorldBody(void);
 
-/* JPH_BroadPhaseLayerFilter_Procs */
+/* JPH_BroadPhaseLayerFilter */
 typedef struct JPH_BroadPhaseLayerFilter_Procs {
 	bool(JPH_API_CALL* ShouldCollide)(void* userData, JPH_BroadPhaseLayer layer);
 } JPH_BroadPhaseLayerFilter_Procs;
@@ -2168,6 +2168,15 @@ typedef struct JPH_BroadPhaseLayerFilter_Procs {
 JPH_CAPI void JPH_BroadPhaseLayerFilter_SetProcs(const JPH_BroadPhaseLayerFilter_Procs* procs);
 JPH_CAPI JPH_BroadPhaseLayerFilter* JPH_BroadPhaseLayerFilter_Create(void* userData);
 JPH_CAPI void JPH_BroadPhaseLayerFilter_Destroy(JPH_BroadPhaseLayerFilter* filter);
+
+/* JPH_SpecifiedBroadPhaseLayerFilter */
+JPH_CAPI JPH_BroadPhaseLayerFilter* JPH_SpecifiedBroadPhaseLayerFilter_Create(JPH_BroadPhaseLayer layer);
+
+/* JPH_IncludeBroadPhaseLayerFilter */
+JPH_CAPI JPH_BroadPhaseLayerFilter* JPH_IncludeBroadPhaseLayerFilter_Create(JPH_BroadPhaseLayer* layers, uint8_t layerCount);
+
+/* JPH_IgnoreBroadPhaseLayerFilter */
+JPH_CAPI JPH_BroadPhaseLayerFilter* JPH_IgnoreBroadPhaseLayerFilter_Create(JPH_BroadPhaseLayer* layers, uint8_t layerCount);
 
 /* JPH_ObjectLayerFilter */
 typedef struct JPH_ObjectLayerFilter_Procs {

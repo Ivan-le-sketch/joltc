@@ -1152,8 +1152,77 @@ void JPH_BroadPhaseLayerFilter_Destroy(JPH_BroadPhaseLayerFilter* filter)
 {
 	if (filter)
 	{
-		delete reinterpret_cast<ManagedBroadPhaseLayerFilter*>(filter);
+		delete reinterpret_cast<BroadPhaseLayerFilter*>(filter);
 	}
+}
+
+/* JPH_SpecifiedBroadPhaseLayerFilter */
+JPH_BroadPhaseLayerFilter* JPH_SpecifiedBroadPhaseLayerFilter_Create(JPH_BroadPhaseLayer layer)
+{
+	auto filter = new JPH::SpecifiedBroadPhaseLayerFilter(static_cast<JPH::BroadPhaseLayer>(layer));
+	return reinterpret_cast<JPH_BroadPhaseLayerFilter*>(filter);
+}
+
+/* JPH_IncludeBroadPhaseLayerFilter */
+/// Allows objects from specified broad phase layers
+class IncludeBroadPhaseLayerFilter : public BroadPhaseLayerFilter
+{
+public:
+	/// Constructor
+	explicit IncludeBroadPhaseLayerFilter(BroadPhaseLayer* inLayers, uint8_t layerCount)
+	{
+		mLayerMask = 0;
+		for (uint8_t i = 0; i < layerCount; ++i)
+		{
+			mLayerMask |= (1ULL << inLayers[i].GetValue());
+		}
+	}
+
+	// See BroadPhaseLayerFilter::ShouldCollide
+	virtual bool ShouldCollide(BroadPhaseLayer inLayer) const override
+	{
+		return (mLayerMask & (1ULL << inLayer.GetValue())) != 0;
+	}
+
+private:
+	uint64_t	mLayerMask;
+};
+
+JPH_BroadPhaseLayerFilter* JPH_IncludeBroadPhaseLayerFilter_Create(JPH_BroadPhaseLayer* layers, uint8_t layerCount)
+{
+	auto filter = new IncludeBroadPhaseLayerFilter((JPH::BroadPhaseLayer*)layers, layerCount);
+	return reinterpret_cast<JPH_BroadPhaseLayerFilter*>(filter);
+}
+
+/* JPH_IgnoreBroadPhaseLayerFilter */
+/// Ignores objects from specified broad phase layers
+class IgnoreBroadPhaseLayerFilter : public BroadPhaseLayerFilter
+{
+public:
+	/// Constructor
+	explicit IgnoreBroadPhaseLayerFilter(BroadPhaseLayer* inLayers, uint8_t layerCount)
+	{
+		mLayerMask = 0;
+		for (uint8_t i = 0; i < layerCount; ++i)
+		{
+			mLayerMask |= (1ULL << inLayers[i].GetValue());
+		}
+	}
+
+	// See BroadPhaseLayerFilter::ShouldCollide
+	virtual bool ShouldCollide(BroadPhaseLayer inLayer) const override
+	{
+		return (mLayerMask & (1ULL << inLayer.GetValue())) == 0;
+	}
+
+private:
+	uint64_t	mLayerMask;
+};
+
+JPH_BroadPhaseLayerFilter* JPH_IgnoreBroadPhaseLayerFilter_Create(JPH_BroadPhaseLayer* layers, uint8_t layerCount)
+{
+	auto filter = new IgnoreBroadPhaseLayerFilter((JPH::BroadPhaseLayer*)layers, layerCount);
+	return reinterpret_cast<JPH_BroadPhaseLayerFilter*>(filter);
 }
 
 /* JPH_ObjectLayerFilter */
@@ -5419,7 +5488,7 @@ void JPH_BodyInterface_RemoveBodies(JPH_BodyInterface* interface, JPH_BodyID* bo
 	AsBodyInterface(interface)->RemoveBodies(joltBodyIDs, number);
 }
 
-void JPH_BodyInterface_DestroyBodies(JPH_BodyInterface* interface, JPH_BodyID* bodyIDs, int32_t number) 
+void JPH_BodyInterface_DestroyBodies(JPH_BodyInterface* interface, JPH_BodyID* bodyIDs, int32_t number)
 {
 	JPH::BodyID* joltBodyIDs = reinterpret_cast<JPH::BodyID*>(bodyIDs);
 	AsBodyInterface(interface)->DestroyBodies(joltBodyIDs, number);
