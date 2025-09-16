@@ -1111,43 +1111,6 @@ static const JPH::BroadPhaseLayerFilter& ToJolt(JPH_BroadPhaseLayerFilter* bpFil
 	return bpFilter ? *reinterpret_cast<JPH::BroadPhaseLayerFilter*>(bpFilter) : g_defaultBroadPhaseLayerFilter;
 }
 
-class ManagedBroadPhaseLayerFilter final : public JPH::BroadPhaseLayerFilter
-{
-public:
-	static const JPH_BroadPhaseLayerFilter_Procs* s_Procs;
-	void* userData = nullptr;
-
-	ManagedBroadPhaseLayerFilter(void* userData_)
-		: userData(userData_)
-	{
-
-	}
-
-	bool ShouldCollide(BroadPhaseLayer inLayer) const override
-	{
-		if (s_Procs != nullptr
-			&& s_Procs->ShouldCollide)
-		{
-			return s_Procs->ShouldCollide(userData, static_cast<JPH_BroadPhaseLayer>(inLayer)) == 1;
-		}
-
-		return true;
-	}
-};
-
-const JPH_BroadPhaseLayerFilter_Procs* ManagedBroadPhaseLayerFilter::s_Procs = nullptr;
-
-void JPH_BroadPhaseLayerFilter_SetProcs(const JPH_BroadPhaseLayerFilter_Procs* procs)
-{
-	ManagedBroadPhaseLayerFilter::s_Procs = procs;
-}
-
-JPH_BroadPhaseLayerFilter* JPH_BroadPhaseLayerFilter_Create(void* userData)
-{
-	auto filter = new ManagedBroadPhaseLayerFilter(userData);
-	return reinterpret_cast<JPH_BroadPhaseLayerFilter*>(filter);
-}
-
 void JPH_BroadPhaseLayerFilter_Destroy(JPH_BroadPhaseLayerFilter* filter)
 {
 	if (filter)
@@ -1230,49 +1193,6 @@ static const JPH::ObjectLayerFilter& ToJolt(JPH_ObjectLayerFilter* opFilter)
 {
 	static const JPH::ObjectLayerFilter g_defaultObjectLayerFilter = {};
 	return opFilter ? *reinterpret_cast<JPH::ObjectLayerFilter*>(opFilter) : g_defaultObjectLayerFilter;
-}
-
-class ManagedObjectLayerFilter final : public JPH::ObjectLayerFilter
-{
-public:
-	static const JPH_ObjectLayerFilter_Procs* s_Procs;
-	void* userData = nullptr;
-
-	ManagedObjectLayerFilter(void* userData_)
-		: userData(userData_)
-	{
-
-	}
-
-	bool ShouldCollide(ObjectLayer inLayer) const override
-	{
-		if (s_Procs != nullptr
-			&& s_Procs->ShouldCollide)
-		{
-			JPH_ObjectLayer* inLayerPtr = new JPH_ObjectLayer(static_cast<JPH_ObjectLayer>(inLayer));
-
-			bool result = s_Procs->ShouldCollide(userData, inLayerPtr) == 1;
-
-			delete inLayerPtr;
-
-			return result;
-		}
-
-		return true;
-	}
-};
-
-const JPH_ObjectLayerFilter_Procs* ManagedObjectLayerFilter::s_Procs = nullptr;
-
-void JPH_ObjectLayerFilter_SetProcs(const JPH_ObjectLayerFilter_Procs* procs)
-{
-	ManagedObjectLayerFilter::s_Procs = procs;
-}
-
-JPH_ObjectLayerFilter* JPH_ObjectLayerFilter_Create(void* userData)
-{
-	auto filter = new ManagedObjectLayerFilter(userData);
-	return reinterpret_cast<JPH_ObjectLayerFilter*>(filter);
 }
 
 void JPH_ObjectLayerFilter_Destroy(JPH_ObjectLayerFilter* filter)
